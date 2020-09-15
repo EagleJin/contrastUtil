@@ -9,14 +9,16 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
-var filepath = flag.String("filepath","defautl", "文件路径")
+var filepath = flag.String("filepath", "defautl", "文件路径")
 var diffresult = flag.String("diffresult", "result.log", "对比结果文件")
 
-func readfile()  {
+func readfile() {
+	startTime := time.Now()
 	flag.Parse()
-	fmt.Println("-filepath:", *filepath)
+	//fmt.Println("-filepath:", *filepath)
 	file, err := os.Open(*filepath)
 	if err != nil {
 		fmt.Println("read file fail..", err)
@@ -45,8 +47,9 @@ func readfile()  {
 	sourceRequestCount := 0
 	// 记录返回结果差异的请求数量
 	diffResponseCount := 0
+	sourceResponseFlag := false
 	for {
-		line,_, err := r.ReadLine()
+		line, _, err := r.ReadLine()
 		if err == io.EOF {
 			fmt.Println("EOF break..")
 			break
@@ -62,11 +65,11 @@ func readfile()  {
 		4、如果两次结果不同，则写入文件
 		*/
 		// 记录文件行号
-		lineNo ++
+		lineNo++
 		content := string(line)
-		fmt.Println("")
-		fmt.Println("line==>>>", content)
-		fmt.Println("flagClear==>>>", flagClear)
+		//fmt.Println("")
+		//fmt.Println("line==>>>", content)
+		//fmt.Println("flagClear==>>>", flagClear)
 		if flagClear {
 			// 清空buffer
 			buffer.Reset()
@@ -75,34 +78,44 @@ func readfile()  {
 			sourceResponse = ""
 			replayResponse = ""
 			writeFlag = false
-			fmt.Println("<<<<<<<<<<<<<<>>>>>>>>>>>>>", flagClear,"<<>>>", buffer.Len())
+			sourceResponseFlag = false
+			//fmt.Println("<<<<<<<<<<<<<<>>>>>>>>>>>>>", flagClear,"<<>>>", buffer.Len())
 		}
 		buffer.WriteString(content)
 		buffer.WriteString("\r\n")
-		if strings.HasPrefix(content, "{") || strings.HasPrefix(content, "<") {
-			if sourceResponse == "" {
-				sourceResponse = content
-			}else if replayResponse == "" {
-				replayResponse = content
-			 }
+		// 增加对原始响应包的判断
+		if strings.HasPrefix(content, "2 ") {
+			sourceResponseFlag = true
 		}
+		fmt.Println("sourceResponseFlag>>>", sourceResponseFlag)
+		// 只获取响应结果（个别POST接口会传json参数，要过滤掉）
+		if sourceResponseFlag {
+			if strings.HasPrefix(content, "{") || strings.HasPrefix(content, "<") {
+				if sourceResponse == "" {
+					sourceResponse = content
+				} else if replayResponse == "" {
+					replayResponse = content
+				}
+			}
+		}
+
 		fmt.Println("sourceRes===>", sourceResponse)
 		fmt.Println("replayRes==>>", replayResponse)
 		if sourceResponse != "" && replayResponse != "" {
-			sourceRequestCount ++
+			sourceRequestCount++
 			if !strings.EqualFold(sourceResponse, replayResponse) {
 				writeFlag = true
-				diffResponseCount ++
+				diffResponseCount++
 			}
 			flagClear = true
 		}
 		fmt.Println("writeFlag===>", writeFlag)
 		if writeFlag {
-			Writefile("soure file lineNo:"+strconv.Itoa(lineNo)+"\r\n",w)
+			Writefile("soure file lineNo:"+strconv.Itoa(lineNo)+"\r\n", w)
 			Writefile(buffer.String(), w)
-			Writefile("\r\n",w)
-			Writefile("<<<<<<<<<<<<<<<<<<++++Separator++++>>>>>>>>>>>>>>>>>>>>>>>> \r\n",w)
-			Writefile("\r\n",w)
+			Writefile("\r\n", w)
+			Writefile("<<<<<<<<<<<<<<<<<<++++Separator++++>>>>>>>>>>>>>>>>>>>>>>>> \r\n", w)
+			Writefile("\r\n", w)
 		}
 
 		//Writefile(line, w)
@@ -111,7 +124,8 @@ func readfile()  {
 		//	break
 		//}
 	}
-	fmt.Printf("sourceRequestCount: %d <> diffResponseCount: %d ", sourceRequestCount, diffResponseCount)
+
+	fmt.Printf("sourceRequestCount: %d <> diffResponseCount: %d ==>time cost: %v\n", sourceRequestCount, diffResponseCount, time.Since(startTime))
 	fmt.Println("")
 	return
 }
@@ -123,13 +137,13 @@ func OpenFile() (*os.File, error) {
 	var f *os.File
 	var err error
 	if CheckFileExist(*diffresult) { // 文件存在
-		fmt.Println("file is exist.")
+		//fmt.Println("file is exist.")
 		result := os.Truncate(*diffresult, 0)
 		if result != nil {
 			fmt.Println("clear file fail..", err)
 			return nil, result
 		}
-		fmt.Println("clear file success..")
+		//fmt.Println("clear file success..")
 		f, err = os.OpenFile(*diffresult, os.O_APPEND, 0666)
 		if err != nil {
 			fmt.Println("file open fail..", err)
@@ -150,11 +164,11 @@ func OpenFile() (*os.File, error) {
  */
 func Writefile(line string, w *bufio.Writer) {
 	// 写文件
-	n, errW := w.WriteString(line)
+	_, errW := w.WriteString(line)
 	if errW != nil {
 		fmt.Println("write file fail..", errW)
 	}
-	fmt.Printf("写入 %d 个字节", n)
+	//fmt.Printf("写入 %d 个字节", n)
 	w.Flush()
 }
 
