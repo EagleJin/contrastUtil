@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -12,14 +13,15 @@ import (
 	"time"
 )
 
-var filepath = flag.String("filepath", "defautl", "文件路径")
-var diffresult = flag.String("diffresult", "result.log", "对比结果文件")
+//var filepath = flag.String("filepath", "defautl", "文件路径")
+//var diffresult = flag.String("diffresult", "result.log", "对比结果文件")
+//var ignoreFileds = flag.String("ignore-fields","","忽略字段")
 
 func readfile() {
 	startTime := time.Now()
 	flag.Parse()
 	//fmt.Println("-filepath:", *filepath)
-	file, err := os.Open(*filepath)
+	file, err := os.Open(Settings.filePath)
 	if err != nil {
 		fmt.Println("read file fail..", err)
 		return
@@ -87,7 +89,6 @@ func readfile() {
 		if strings.HasPrefix(content, "2 ") {
 			sourceResponseFlag = true
 		}
-		fmt.Println("sourceResponseFlag>>>", sourceResponseFlag)
 		// 只获取响应结果（个别POST接口会传json参数，要过滤掉）
 		if sourceResponseFlag {
 			if strings.HasPrefix(content, "{") || strings.HasPrefix(content, "<") {
@@ -98,31 +99,53 @@ func readfile() {
 				}
 			}
 		}
-
-		fmt.Println("sourceRes===>", sourceResponse)
-		fmt.Println("replayRes==>>", replayResponse)
 		if sourceResponse != "" && replayResponse != "" {
 			sourceRequestCount++
-			if !strings.EqualFold(sourceResponse, replayResponse) {
-				writeFlag = true
-				diffResponseCount++
+			// 非json结构直接对比结果字符串
+			if strings.HasPrefix(content, "<") {
+				if !strings.EqualFold(sourceResponse, replayResponse) {
+					writeFlag = true
+					diffResponseCount++
+				}
+			} else {
+				// 解析json结果，逐个属性比对
+				var (
+					sourceJson    map[string]interface{}
+					replayJson    map[string]interface{}
+					compareResult = &JsonDiff{HasDiff: false, Result: ""}
+				)
+				sourceErr := json.Unmarshal([]byte(sourceResponse), &sourceJson)
+				if sourceErr != nil {
+					fmt.Println("sourceResponse to json error.", sourceErr)
+					continue
+				}
+				replayErr := json.Unmarshal([]byte(replayResponse), &replayJson)
+				if replayErr != nil {
+					fmt.Println("replayResponse to json error.", replayErr)
+					continue
+				}
+				jsonDiffDict(sourceJson, replayJson, 1, compareResult)
+				if compareResult.HasDiff {
+					writeFlag = true
+					diffResponseCount++
+
+					buffer.WriteString("\r\n")
+					buffer.WriteString("<<< 结果中差异的字段是： >>>")
+					buffer.WriteString(compareResult.Result)
+					buffer.WriteString("\r\n")
+					fmt.Println("<<<compareResult>>>", compareResult.Result)
+				}
 			}
 			flagClear = true
 		}
-		fmt.Println("writeFlag===>", writeFlag)
+		//fmt.Println("writeFlag===>", writeFlag)
 		if writeFlag {
-			Writefile("soure file lineNo:"+strconv.Itoa(lineNo)+"\r\n", w)
+			Writefile("soure file lineNo:"+strconv.Itoa(lineNo)+"；代表原文件中该行上面第一组请求 \r\n", w)
 			Writefile(buffer.String(), w)
 			Writefile("\r\n", w)
 			Writefile("<<<<<<<<<<<<<<<<<<++++Separator++++>>>>>>>>>>>>>>>>>>>>>>>> \r\n", w)
 			Writefile("\r\n", w)
 		}
-
-		//Writefile(line, w)
-		//count ++
-		//if count > 103 {
-		//	break
-		//}
 	}
 
 	fmt.Printf("sourceRequestCount: %d <> diffResponseCount: %d ==>time cost: %v\n", sourceRequestCount, diffResponseCount, time.Since(startTime))
@@ -136,21 +159,21 @@ func readfile() {
 func OpenFile() (*os.File, error) {
 	var f *os.File
 	var err error
-	if CheckFileExist(*diffresult) { // 文件存在
+	if CheckFileExist(Settings.diffResult) { // 文件存在
 		//fmt.Println("file is exist.")
-		result := os.Truncate(*diffresult, 0)
+		result := os.Truncate(Settings.diffResult, 0)
 		if result != nil {
 			fmt.Println("clear file fail..", err)
 			return nil, result
 		}
 		//fmt.Println("clear file success..")
-		f, err = os.OpenFile(*diffresult, os.O_APPEND, 0666)
+		f, err = os.OpenFile(Settings.diffResult, os.O_APPEND, 0666)
 		if err != nil {
 			fmt.Println("file open fail..", err)
 			return nil, err
 		}
 	} else { // 文件不存在
-		f, err = os.Create(*diffresult)
+		f, err = os.Create(Settings.diffResult)
 		if err != nil {
 			fmt.Println("file create fail..", err)
 			return nil, err
