@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -28,7 +27,9 @@ func readfile() {
 	}
 	defer file.Close()
 
-	r := bufio.NewReader(file)
+	//r := bufio.NewReader(file)
+	scanner := bufio.NewScanner(file)
+	scanner.Split(bufio.ScanLines)
 
 	// 打开文件，重复多次写入内容，defer关闭文件
 	f, err := OpenFile()
@@ -38,6 +39,7 @@ func readfile() {
 	}
 	// 创建新的Write对象
 	w := bufio.NewWriter(f)
+
 	//count := 0
 	var buffer bytes.Buffer
 	flagClear := false
@@ -50,15 +52,15 @@ func readfile() {
 	// 记录返回结果差异的请求数量
 	diffResponseCount := 0
 	sourceResponseFlag := false
-	for {
-		line, _, err := r.ReadLine()
+	for scanner.Scan() {
+		/*line, _, err := r.ReadLine()
 		if err == io.EOF {
 			fmt.Println("EOF break..")
 			break
 		}
 		if err != nil {
 			fmt.Println("readline fail..", err)
-		}
+		}*/
 
 		/**
 		1、记录文件内容
@@ -68,7 +70,7 @@ func readfile() {
 		*/
 		// 记录文件行号
 		lineNo++
-		content := string(line)
+		content := scanner.Text() //string(line)
 		//fmt.Println("")
 		//fmt.Println("line==>>>", content)
 		//fmt.Println("flagClear==>>>", flagClear)
@@ -114,6 +116,7 @@ func readfile() {
 					replayJson    map[string]interface{}
 					compareResult = &JsonDiff{HasDiff: false, Result: ""}
 				)
+				//fmt.Println("sourceResponse==>", sourceResponse)
 				sourceErr := json.Unmarshal([]byte(sourceResponse), &sourceJson)
 				if sourceErr != nil {
 					fmt.Println("sourceResponse to json error.", sourceErr)
@@ -167,7 +170,7 @@ func OpenFile() (*os.File, error) {
 			return nil, result
 		}
 		//fmt.Println("clear file success..")
-		f, err = os.OpenFile(Settings.diffResult, os.O_APPEND, 0666)
+		f, err = os.OpenFile(Settings.diffResult, os.O_RDWR|os.O_APPEND, 0666)
 		if err != nil {
 			fmt.Println("file open fail..", err)
 			return nil, err
