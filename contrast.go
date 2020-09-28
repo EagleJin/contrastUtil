@@ -1,3 +1,12 @@
+/**
+ * 注意：
+ * 1、bufio.ReadLine() 读满缓冲区就返回，剩下的字节不会丢弃，留着下次读取.如果一行太长，会被截断
+ * 2、Scanner在初始化的时候有设置一个maxTokenSize，这个值默认是MaxScanTokenSize = 64 * 1024 ，当一行的长度大于64*1024即65536之后，
+ * 就会出现ErrTooLong错误,当遇到错误时，scanner就会自动退出
+ * 3、通过设置Scanner buffer更改默认最大限制，可以解决超过默认限制，报：error: bufio.Scanner: token too long 错误，导致退出问题
+ * 	切记：设置buffer一定在Scan 之前，不然会不工作，Buffer() 方法上注释有说明
+ * https://blog.csdn.net/tianlongtc/article/details/80148509
+ */
 package main
 
 import (
@@ -15,6 +24,10 @@ import (
 //var filepath = flag.String("filepath", "defautl", "文件路径")
 //var diffresult = flag.String("diffresult", "result.log", "对比结果文件")
 //var ignoreFileds = flag.String("ignore-fields","","忽略字段")
+const (
+	HTTP_STATUS_304 = "304"
+	MAX_CAPACITY    = 1024 * 1024
+)
 
 func readfile() {
 	startTime := time.Now()
@@ -28,8 +41,10 @@ func readfile() {
 	defer file.Close()
 
 	//r := bufio.NewReader(file)
-	scanner := bufio.NewScanner(file)
-	scanner.Split(bufio.ScanLines)
+
+	r := bufio.NewScanner(file)
+	buf := make([]byte, MAX_CAPACITY)
+	r.Buffer(buf, MAX_CAPACITY)
 
 	// 打开文件，重复多次写入内容，defer关闭文件
 	f, err := OpenFile()
@@ -51,14 +66,19 @@ func readfile() {
 	sourceRequestCount := 0
 	// 记录返回结果差异的请求数量
 	diffResponseCount := 0
-	sourceResponseFlag := false
-	for scanner.Scan() {
-		/*line, _, err := r.ReadLine()
-		if err == io.EOF {
+	responseFlag := false
+	replayResFlag := false
+	for r.Scan() {
+		//line, err := r.ReadString('\n')
+		/*if err == io.EOF {
 			fmt.Println("EOF break..")
 			break
-		}
-		if err != nil {
+		}*/
+		/*if err != nil {
+			if err == io.EOF {
+
+			}
+			panic(err)
 			fmt.Println("readline fail..", err)
 		}*/
 
@@ -70,53 +90,100 @@ func readfile() {
 		*/
 		// 记录文件行号
 		lineNo++
-		content := scanner.Text() //string(line)
+		content := r.Text()
 		//fmt.Println("")
 		//fmt.Println("line==>>>", content)
 		//fmt.Println("flagClear==>>>", flagClear)
+
+		// 1 代表请求，说明是一个新的请求，要把原来设置的 返回和回放的相关变量置空。防止个别请求没有返回，导致对比结果错误
+		if strings.HasPrefix(content, "1 ") {
+			// 代表一个新的请求，重置状态
+			flagClear = true
+		}
+
 		if flagClear {
 			// 清空buffer
 			buffer.Reset()
-			// 重置计数器
 			flagClear = false
 			sourceResponse = ""
 			replayResponse = ""
 			writeFlag = false
-			sourceResponseFlag = false
+			responseFlag = false
+			replayResFlag = false
 			//fmt.Println("<<<<<<<<<<<<<<>>>>>>>>>>>>>", flagClear,"<<>>>", buffer.Len())
 		}
 		buffer.WriteString(content)
 		buffer.WriteString("\r\n")
-		// 增加对原始响应包的判断
+
+		// 增加对原始响应包的判断，只获取响应结果（个别POST请求接口会传json参数，要过滤掉）
 		if strings.HasPrefix(content, "2 ") {
-			sourceResponseFlag = true
+			responseFlag = true
+		} else if strings.HasPrefix(content, "3 ") {
+			replayResFlag = true
 		}
-		// 只获取响应结果（个别POST接口会传json参数，要过滤掉）
-		if sourceResponseFlag {
-			if strings.HasPrefix(content, "{") || strings.HasPrefix(content, "<") {
-				if sourceResponse == "" {
-					sourceResponse = content
-				} else if replayResponse == "" {
-					replayResponse = content
-				}
+		if responseFlag && !replayResFlag {
+			if strings.HasPrefix(content, "HTTP/1.1") && strings.Contains(content, HTTP_STATUS_304) {
+				sourceResponse = HTTP_STATUS_304
+			} else if strings.HasPrefix(content, "{") || strings.HasPrefix(content, "<") {
+				sourceResponse = content
+			}
+		}
+		if replayResFlag {
+			if strings.HasPrefix(content, "HTTP/1.1") && strings.Contains(content, HTTP_STATUS_304) {
+				replayResponse = HTTP_STATUS_304
+			} else if strings.HasPrefix(content, "{") || strings.HasPrefix(content, "<") {
+				replayResponse = content
 			}
 		}
 		if sourceResponse != "" && replayResponse != "" {
+			//fmt.Println("sourceR===>",sourceResponse)
+			//fmt.Println("replayR===>",replayResponse)
 			sourceRequestCount++
 			// 非json结构直接对比结果字符串
-			if strings.HasPrefix(content, "<") {
+			if strings.HasPrefix(sourceResponse, "<") && strings.HasPrefix(replayResponse, "<") {
+				fmt.Println("not json...")
 				if !strings.EqualFold(sourceResponse, replayResponse) {
 					writeFlag = true
 					diffResponseCount++
 				}
+			} else if strings.EqualFold(sourceResponse, HTTP_STATUS_304) && strings.EqualFold(replayResponse, HTTP_STATUS_304) {
+				// 都是304，代表结果一致，进入下一次循环
+				fmt.Println("all 304..")
+				//fmt.Println("sourceResponse==>", sourceResponse)
+				//fmt.Println("replayResponse==>", replayResponse)
+				continue
+			} else if strings.EqualFold(sourceResponse, HTTP_STATUS_304) {
+				fmt.Println("source 304...")
+				//fmt.Println("sourceResponse==>", sourceResponse)
+				//fmt.Println("replayResponse==>", replayResponse)
+				writeFlag = true
+				diffResponseCount++
+				buffer.WriteString("\r\n")
+				buffer.WriteString("<<< 差异结果： >>>\r\n")
+				buffer.WriteString("-HTTP" + HTTP_STATUS_304 + "\r\n")
+				buffer.WriteString("+" + replayResponse)
+				buffer.WriteString("\r\n")
+			} else if strings.EqualFold(replayResponse, HTTP_STATUS_304) {
+				fmt.Println("replay 304...")
+				//fmt.Println("sourceResponse==>", sourceResponse)
+				//fmt.Println("replayResponse==>", replayResponse)
+				writeFlag = true
+				diffResponseCount++
+				buffer.WriteString("\r\n")
+				buffer.WriteString("<<< 差异结果： >>>\r\n")
+				buffer.WriteString("-" + sourceResponse + "\r\n")
+				buffer.WriteString("+HTTP" + HTTP_STATUS_304)
+				buffer.WriteString("\r\n")
 			} else {
+				fmt.Println("all not 304...")
+				//fmt.Println("sourceResponse==>", sourceResponse)
+				//fmt.Println("replayResponse==>", replayResponse)
 				// 解析json结果，逐个属性比对
 				var (
 					sourceJson    map[string]interface{}
 					replayJson    map[string]interface{}
 					compareResult = &JsonDiff{HasDiff: false, Result: ""}
 				)
-				//fmt.Println("sourceResponse==>", sourceResponse)
 				sourceErr := json.Unmarshal([]byte(sourceResponse), &sourceJson)
 				if sourceErr != nil {
 					fmt.Println("sourceResponse to json error.", sourceErr)
@@ -136,7 +203,7 @@ func readfile() {
 					buffer.WriteString("<<< 结果中差异的字段是： >>>")
 					buffer.WriteString(compareResult.Result)
 					buffer.WriteString("\r\n")
-					fmt.Println("<<<compareResult>>>", compareResult.Result)
+					//fmt.Println("<<<compareResult>>>", compareResult.Result)
 				}
 			}
 			flagClear = true
@@ -150,9 +217,12 @@ func readfile() {
 			Writefile("\r\n", w)
 		}
 	}
-
+	if r.Err() != nil {
+		fmt.Printf("error: %s\n", r.Err())
+	}
 	fmt.Printf("sourceRequestCount: %d <> diffResponseCount: %d ==>time cost: %v\n", sourceRequestCount, diffResponseCount, time.Since(startTime))
 	fmt.Println("")
+	fmt.Println("lineNo--->", lineNo)
 	return
 }
 

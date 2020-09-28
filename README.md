@@ -15,7 +15,7 @@
 > arm arm64 386 amd64 ppc64 ppc64le mips64 mips64le s390x
 
 #### 设置好目标操作系统与目标处理器架构后，针对主文件（main.go）执行go build
-``go build main.go``
+``go build contrast.go json_compare.go settings.go``
 #### 之后就会在当前目录生成打包好的Go项目文件了，是Linux平台可执行的二进制文件
 
 #### 将该文件放入linux系统某个文件夹下，chmod 773 [文件名] 赋予文件权限，./xx 命令即可执行文件，不需要go的任何依赖，就可以直接运行了。
